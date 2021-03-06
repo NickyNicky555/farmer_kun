@@ -4,11 +4,11 @@ const admin = require('firebase-admin');
 
 var mqtt = require('mqtt');
 var options = {
-    port: 12803,
+    port: 18812,
     host: 'mqtt://xxx.cloudmqtt.com',
     clientId: 'mqttjs_' + Math.random().toString(16).substr(2, 8),
-    username: 'xxxxx',
-    password: 'xxxxx',
+    username: 'ijxuwums',
+    password: 'XdHu99Le60OA',
     keepalive: 60,
     reconnectPeriod: 1000,
     protocolId: 'MQIsdp',

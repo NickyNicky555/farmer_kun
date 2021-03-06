@@ -1,416 +1,123 @@
-const functions = require('firebase-functions');
-const request = require('request-promise');
-const admin = require('firebase-admin');
-
-var mqtt = require('mqtt');
-var options = {
-    port: 18812,
-    host: 'mqtt://xxx.cloudmqtt.com',
-    clientId: 'mqttjs_' + Math.random().toString(16).substr(2, 8),
-    username: 'ijxuwums',
-    password: 'XdHu99Le60OA',
-    keepalive: 60,
-    reconnectPeriod: 1000,
-    protocolId: 'MQIsdp',
-    protocolVersion: 3,
-    clean: true,
-    encoding: 'utf8'
-}
-
-
-admin.initializeApp(functions.config().firebase);
-
-// // Create and Deploy Your First Cloud Functions
-// // https://firebase.google.com/docs/functions/write-firebase-functions
-//
-// exports.helloWorld = functions.https.onRequest((request, response) => {
-//  response.send("Hello from Firebase!");
-// });
-
-const LINE_TOKEN = 'xxxx';
-const LINE_MESSAGING_API = 'https://api.line.me/v2/bot/message';
-const LINE_HEADER = {
-  'Content-Type': 'application/json',
-  'Authorization': `Bearer ${LINE_TOKEN}`
-};
-
-exports.LineHook = functions.https.onRequest((req, res) => {
-
-  if (req.body.events[0].message.type !== 'text') {
-    //return;
-    reply(req.body, 'ไม่พบสิ่งที่คุณต้องการค้นหา');
-  }
-
-  const hwId = "abcd";
-  const contentText = req.body.events[0].message.text;
-
-  var client  = mqtt.connect('mqtt://xxx.cloudmqtt.com', options);
-    switch (contentText.toLowerCase()) {
-        case "console":
-            openConsole(req.body);
-            break;
-        case "cmd":
-            client.on('connect', function () {
-              client.publish('getStatus', hwId + '/STATUS');
-              client.subscribe('UPDATE_STATUS', function (err) {
-                if (!err) {
-                  //client.publish('presence', 'Hello mqtt')
-                }
-              })
-            });
-             
-            client.on('message', function (topic, message) {
-              reply(req.body, message.toString());
-              updateDB(message);
-              client.end();
-            });
-            
-            break;
-        case "status":
-            client.on('connect', function () {
-              client.publish('getStatus', hwId + '/STATUS');
-              client.subscribe('UPDATE_STATUS', function (err) {
-                if (!err) {
-                  //client.publish('presence', 'Hello mqtt')
-                }
-              })
-            });
-             
-            client.on('message', function (topic, message) {
-              updateDB(message);
-              client.end();
-            });
-
-            getHardwareStatus(req.body, hwId);
-
-            break;
-        case "openvalve":
-            client.on('connect', function () {
-              client.publish('getStatus', hwId + '/Solenoid=ON', function(err) {
-                if(!err){
-                    openValve(req.body);
-                }else{
-                    reply(req.body, "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง");
-                }
-                console.log("Message is published");
-                //client.end(); // Close the connection when published
-              });
-
-              client.subscribe('UPDATE_STATUS', function (err) {
-                if (!err) {
-                  //client.publish('presence', 'Hello mqtt')
-                }
-              })
-            });
-             
-            client.on('message', function (topic, message) {
-              updateDB(message);
-              client.end();
-            });
-            
-            break;
-        case "closevalve":
-          client.on('connect', function () {
-            client.publish('getStatus', hwId + '/Solenoid=OFF', function(err) {
-              if(!err){
-                closeValve(req.body);
-              }else{
-                  reply(req.body, "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง");
-              }
-              //client.end(); // Close the connection when published
-            });
-
-            client.subscribe('UPDATE_STATUS', function (err) {
-              if (!err) {
-                //client.publish('presence', 'Hello mqtt')
-              }
-            })
-          });
-          
-          client.on('message', function (topic, message) {
-            updateDB(message);
-            client.end();
-          });
-            
-            break;
-        default:
-            reply(req.body, contentText);
-    }
-
+require('dotenv').config();
+const request = require('request');
+const express = require('express');
+const port = process.env.PORT || 3001;
+const _ = require('lodash');
+const bodyParser = require('body-parser');
+const app = express();
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+// STATUS LED
+let status = [false, false];
+// TOPIC
+const LED_TOPIC = `/ESP/LED`;
+// Create a MQTT Client
+const mqtt = require('mqtt');
+// Create a client connection to CloudMQTT for live data
+const client = mqtt.connect('xxxxxxxx',  // Server MQTT ของเรานะ
+{
+  username: 'xxxxxxxxxxx', // Username MQTT ของเรานะ
+  password: 'xxxxxxxxxxx', // Password MQTT ของเรานะ
+  port: xxxxx // Port MQTT ของเรานะ
 });
-
-const openValve = (bodyResponse) => {
-  reply(bodyResponse, 'เปิดระบบเรียบร้อยแล้ว')
-}
-
-const closeValve = (bodyResponse) => {
-  reply(bodyResponse, 'ปิดระบบเรียบร้อยแล้ว')
-}
-
-const updateDB = (obj) => {
-  var dt = new Date();
-  var utcDate = dt.toUTCString();
-
-  var param = JSON.parse(obj);
-
-  admin.database().ref('hwStatus/' + param.hwid).set({
-    humidity: param.humidity,
-    temperature: param.temperature,
-    soilMoisture: param.moisture,
-    valveState: param.valve,
-    time: utcDate,
-  });
-}
-
-const getHardwareStatus = (bodyResponse, hwId) => {
-  admin.database().ref('hwStatus/' + hwId).once('value', (snapshot) => {
-    var event = snapshot.val();
-    var valveText = "";
-    if(event.valveState === "1"){
-        valveText = "ON";
-    }else{
-        valveText = "OFF";
-    }
-    const replyMessage = {
-      "type": "flex",
-      "altText": "แผงควบคุมระบบรดน้ำในฟาร์ม",
-      "contents": {
-        "type": "bubble",
-        "direction": "ltr",
-        "header": {
-          "type": "box",
-          "layout": "vertical",
-          "contents": [
-            {
-              "type": "text",
-              "text": "รายงานสถานะจากอุปกรณ์",
-              "align": "center",
-              "weight": "bold"
+client.on('connect', function() { 
+  // When connected
+  console.log("Connected to CloudMQTT");
+client.subscribe('/ESP/LED', function() {
+    // when a message arrives, do something with it
+    client.on('message', function(topic, message, packet) {
+      switch(topic) {
+        case LED_TOPIC:
+          messageFromBuffer = message.toString('utf8');
+          if (messageFromBuffer != 'GET') {
+            const splitStatus = messageFromBuffer.split(',');
+            if (splitStatus.length > 0) {
+              splitStatus.map((ele, index)=> {
+                console.log(`DOIT ${ele} ${index} ${parseInt(ele)}`);
+                if (ele == 0) {
+                  status[index] = false;
+                } else {
+                  status[index] = true;
+                }
+              });
             }
-          ]
-        },
-        "hero": {
-          "type": "image",
-          "url": "https://firebasestorage.googleapis.com/v0/b/thaifarmer-1be95.appspot.com/o/condition.png?alt=media&token=8c44813c-9e16-49a2-a2c8-1718f3c7bcf7",
-          "size": "lg",
-          "aspectRatio": "1:1",
-          "aspectMode": "fit"
-        },
-        "body": {
-          "type": "box",
-          "layout": "vertical",
-          "flex": 1,
-          "contents": [
-            {
-              "type": "box",
-              "layout": "horizontal",
-              "contents": [
-                {
-                  "type": "image",
-                  "url": "https://firebasestorage.googleapis.com/v0/b/thaifarmer-1be95.appspot.com/o/pot.png?alt=media&token=d926d245-3726-4d92-b307-14f4383a0069",
-                  "flex": 0,
-                  "align": "start",
-                  "size": "xxs",
-                  "aspectRatio": "2:1"
-                },
-                {
-                  "type": "text",
-                  "text": "อุณหภูมิ",
-                  "weight": "bold"
-                },
-                {
-                  "type": "text",
-                  "text": `${event.temperature}°C`,
-                  "align": "end"
-                },
-                {
-                  "type": "spacer"
-                }
-              ]
-            },
-            {
-              "type": "box",
-              "layout": "horizontal",
-              "contents": [
-                {
-                  "type": "image",
-                  "url": "https://firebasestorage.googleapis.com/v0/b/thaifarmer-1be95.appspot.com/o/humidity.png?alt=media&token=393f1c2b-67f9-4f27-93ad-58660d813c00",
-                  "flex": 0,
-                  "align": "start",
-                  "size": "xxs",
-                  "aspectRatio": "2:1"
-                },
-                {
-                  "type": "text",
-                  "text": "ความชื้น",
-                  "align": "start",
-                  "weight": "bold"
-                },
-                {
-                  "type": "text",
-                  "text": `${event.humidity}%`,
-                  "align": "end"
-                },
-                {
-                  "type": "spacer"
-                }
-              ]
-            },
-            {
-              "type": "box",
-              "layout": "horizontal",
-              "contents": [
-                {
-                  "type": "image",
-                  "url": "https://firebasestorage.googleapis.com/v0/b/thaifarmer-1be95.appspot.com/o/soil.png?alt=media&token=422971be-a433-4d4a-8c6f-22976e936111",
-                  "flex": 0,
-                  "align": "start",
-                  "size": "xxs",
-                  "aspectRatio": "2:1"
-                },
-                {
-                  "type": "text",
-                  "text": "ความชื้นในดิน",
-                  "weight": "bold"
-                },
-                {
-                  "type": "text",
-                  "text": `${event.soilMoisture}%`,
-                  "align": "end"
-                },
-                {
-                  "type": "spacer"
-                }
-              ]
-            },
-            {
-              "type": "box",
-              "layout": "horizontal",
-              "contents": [
-                {
-                  "type": "image",
-                  "url": "https://firebasestorage.googleapis.com/v0/b/thaifarmer-1be95.appspot.com/o/watering.png?alt=media&token=ddd07a8e-5fed-4c95-9019-e62b6cd08f91",
-                  "flex": 0,
-                  "align": "start",
-                  "size": "xxs",
-                  "aspectRatio": "2:1"
-                },
-                {
-                  "type": "text",
-                  "text": "สถานะวาล์ว",
-                  "weight": "bold"
-                },
-                {
-                  "type": "text",
-                  "text": `${valveText}`,
-                  "flex": 1,
-                  "align": "end"
-                },
-                {
-                  "type": "spacer"
-                }
-              ]
-            },
-            {
-              "type": "box",
-              "layout": "horizontal",
-              "contents": [
-                {
-                  "type": "spacer"
-                },
-                {
-                  "type": "text",
-                  "text": `${event.time}`,
-                  "align": "center"
-                },
-                {
-                  "type": "spacer"
-                }
-              ]
-            },
-            {
-              "type": "spacer"
-            }
-          ]
-        },
-        "footer": {
-          "type": "box",
-          "layout": "horizontal",
-          "contents": [
-            {
-              "type": "button",
-              "action": {
-                "type": "message",
-                "label": "เปิดระบบน้ำ",
-                "text": "openValve"
-              },
-              "style": "primary"
-            },
-            {
-              "type": "button",
-              "action": {
-                "type": "message",
-                "label": "ปิดระบบน้ำ",
-                "text": "closeValve"
-              },
-              "margin": "sm",
-              "style": "secondary"
-            }
-          ]
-        }
+          }
+console.log(`Received '${message}' on '${topic}`);
+        break;
+        default:
+          console.log(`Unknow Topic group`);
       }
-    };
-    replyMsg(bodyResponse, replyMessage);
-
+    });
   });
+});
+app.post('/webhook', async (req, res) => {
+const message = req.body.events[0].message.text;
+  const reply_token = req.body.events[0].replyToken;
+  const TOKEN = `xxxxxxx`; // Token ที่ได้จาก Channel access token
+  const HEADERS = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${TOKEN}`
+  };
+if (message == 'เปิดไฟ หน้าบ้าน' || message == 'ปิดไฟ หน้าบ้าน') {
+    if (message == 'เปิดไฟ หน้าบ้าน') {
+      await mqttMessage(LED_TOPIC, 'LEDON_ONE');
+    } else {
+      await mqttMessage(LED_TOPIC, 'LEDOFF_ONE');
+    }
+  }
+if (message == 'เปิดไฟ หลังบ้าน' || message == 'ปิดไฟ หลังบ้าน') {
+    if (message == 'เปิดไฟ หลังบ้าน') {
+      await mqttMessage(LED_TOPIC, 'LEDON_TWO');
+    } else {
+      await mqttMessage(LED_TOPIC, 'LEDOFF_TWO');
+    }
+  }
+mqttMessage(LED_TOPIC, 'GET');
+if (message == 'สถานะทั้งหมด') {
+    await checkStatus();
+  } else {
+    await checkStatus();
+  }
+console.log(status);
+  const objectMessage = genFlexMessage(status[0], status[1]);
+const body = JSON.stringify({
+    replyToken: reply_token,
+    messages: [
+      objectMessage
+    ]
+  });
+request({
+    method: `POST`,
+    url: 'https://api.line.me/v2/bot/message/reply',
+    headers: HEADERS,
+    body: body
+  });
+res.sendStatus(200);
+});
+let mqttMessage = async (topic, message) => {
+  client.publish(topic, message);
+  await checkStatus();
 }
-
-const replyMsg = (bodyResponse, msg) => {
-  return request({
-    method: `POST`,
-    uri: `${LINE_MESSAGING_API}/reply`,
-    headers: LINE_HEADER,
-    body: JSON.stringify({
-      replyToken: bodyResponse.events[0].replyToken,
-      messages: [msg]
-    })
-  });
-};
-
-const reply = (bodyResponse, msg) => {
-  return request({
-    method: `POST`,
-    uri: `${LINE_MESSAGING_API}/reply`,
-    headers: LINE_HEADER,
-    body: JSON.stringify({
-      replyToken: bodyResponse.events[0].replyToken,
-      messages: [
-        {
-          type: `text`,
-          text: msg
-        }
-      ]
-    })
-  });
-};
-
-const openConsole = (bodyResponse) => {
-  const replyMessage = {
+let checkStatus = async () => {
+  await new Promise(done => setTimeout(done, 3000));
+}
+let genFlexMessage = (ledOne, ledTwo) => {
+  return {
     "type": "flex",
-    "altText": "แผงควบคุมระบบรดน้ำในฟาร์ม",
+    "altText": "สถานะระบบไฟ",
     "contents": {
       "type": "bubble",
-      "styles": {
-        "footer": {
-          "backgroundColor": "#42b3f4"
-        }
-      },
       "hero": {
         "type": "image",
-        "url": "https://firebasestorage.googleapis.com/v0/b/thaifarmer-1be95.appspot.com/o/network-782707_1280.png?alt=media&token=540b3a1c-a172-4b00-a7f1-0d96e9279a56",
+        "url": "https://www.ihome108.com/wp-content/uploads/2017/05/home-slide-01.jpg",
         "size": "full",
         "aspectRatio": "20:13",
-        "aspectMode": "cover"
+        "aspectMode": "cover",
+        "action": {
+          "type": "uri",
+          "label": "Line",
+          "uri": "https://linecorp.com/"
+        }
       },
       "body": {
         "type": "box",
@@ -418,31 +125,52 @@ const openConsole = (bodyResponse) => {
         "contents": [
           {
             "type": "text",
-            "margin": "sm",
-            "text": "Thai Smart Farmer - IoT",
-            "weight": "bold",
-            "size": "md",
-            "wrap": true
+            "text": "ระบบไฟ",
+            "flex": 0,
+            "size": "xl",
+            "weight": "bold"
           },
           {
             "type": "box",
-            "layout": "vertical",
-            "margin": "xs",
+            "layout": "horizontal",
+            "flex": 1,
+            "margin": "md",
             "contents": [
               {
-                "type": "box",
-                "layout": "baseline",
-                "spacing": "sm",
-                "contents": [
-                  {
-                    "type": "text",
-                    "text": "แผงควบคุมการรดน้ำในฟาร์ม",
-                    "wrap": true,
-                    "color": "#666666",
-                    "size": "sm",
-                    "flex": 6
-                  }
-                ]
+                "type": "text",
+                "text": "ไฟหน้าบ้าน",
+                "align": "start",
+                "gravity": "top",
+                "weight": "bold"
+              },
+              {
+                "type": "text",
+                "text": (ledOne == true) ? "Open" : "Close",
+                "align": "start",
+                "weight": "bold",
+                "color": (ledOne == true) ? "#FF0000" : "#000000",
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "horizontal",
+            "flex": 1,
+            "margin": "md",
+            "contents": [
+              {
+                "type": "text",
+                "text": "ไฟหลังบ้าน",
+                "align": "start",
+                "gravity": "top",
+                "weight": "bold"
+              },
+              {
+                "type": "text",
+                "text": (ledTwo == true) ? "Open" : "Close",
+                "align": "start",
+                "weight": "bold",
+                "color": (ledTwo == true) ? "#FF0000" : "#000000",
               }
             ]
           }
@@ -451,44 +179,36 @@ const openConsole = (bodyResponse) => {
       "footer": {
         "type": "box",
         "layout": "vertical",
+        "flex": 0,
         "spacing": "sm",
         "contents": [
           {
             "type": "button",
-            "style": "link",
-            "color": "#FFFFFF",
-            "height": "sm",
             "action": {
               "type": "message",
-              "label": "เปิดระบบน้ำ",
-              "text": "openValve"
-            }
+              "label": `${(ledOne == true) ? "ปิดไฟ" : "เปิดไฟ"}หน้าบ้าน`,
+              "text": `${(ledOne == true) ? "ปิดไฟ" : "เปิดไฟ"} หน้าบ้าน`
+            },
+            "height": "sm",
+            "style": "link"
           },
           {
             "type": "button",
-            "style": "link",
-            "color": "#FFFFFF",
-            "height": "sm",
             "action": {
               "type": "message",
-              "label": "ปิดระบบน้ำ",
-              "text": "closeValve"
-            }
+              "label": `${(ledTwo == true) ? "ปิดไฟ" : "เปิดไฟ"}หลังบ้าน`,
+              "text": `${(ledTwo == true) ? "ปิดไฟ" : "เปิดไฟ"} หลังบ้าน`
+            },
+            "height": "sm",
+            "style": "link"
           },
           {
-            "type": "button",
-            "style": "link",
-            "color": "#FFFFFF",
-            "height": "sm",
-            "action": {
-              "type": "message",
-              "label": "ตรวจสอบสถานะอุปกรณ์",
-              "text": "status"
-            }
+            "type": "spacer",
+            "size": "sm"
           }
         ]
       }
     }
-  }
-  replyMsg(bodyResponse, replyMessage);
-};
+  };
+}
+app.listen(port, () => console.log(`Example app listening on port ${port}!`))
